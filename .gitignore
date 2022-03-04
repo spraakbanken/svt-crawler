@@ -1,0 +1,14 @@
+*.pyc
+__pycache__
+venv
+
+data
+data_old
+svt-*
+
+export
+sparv-workdir
+.snakemake
+nohup*
+
+.svn

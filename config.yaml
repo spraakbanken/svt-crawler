@@ -1,0 +1,69 @@
+metadata:
+    language: swe
+    description:
+        eng: News texts from svt.se
+        swe: Nyhetstexter från svt.se
+
+classes:
+    paragraph: p
+
+import:
+    source_dir: data/xml
+    importer: xml_import:parse
+    document_annotation: text
+
+xml_import:
+  elements:
+    - text:date
+    - p
+
+export:
+    scramble_on: <paragraph>
+    default:
+        - cwb:vrt_scrambled
+        - cwb:encode_scrambled
+        - cwb:info
+        - korp:lemgram_sql
+        - korp:relations_sql
+        - korp:timespan_sql
+        - stats_export:sbx_freq_list
+        - xml_export:scrambled
+        - xml_export:combined_scrambled
+        - xml_export:compressed_scrambled
+        - sbx_metadata:json_export
+        - sbx_metadata:metashare
+    annotations:
+        - SBX_DEFAULT.paragraph
+        - text:misc.data_collected
+    source_annotations:
+        - p as paragraph
+        - ...
+
+install:
+  - cwb:install_corpus_scrambled
+  - korp:install_lemgrams
+  - korp:install_relations
+  - korp:install_timespan
+  - xml_export:install_scrambled
+  - stats_export:install_sbx_freq_list
+  - sbx_metadata:install_json
+  - sbx_metadata:install_metashare
+
+cwb:
+    skip_compression: True
+
+sbx_metadata:
+    xml_export: scrambled
+
+dateformat:
+  datetime_from: <text>:date
+  datetime_to: <text>:date
+  regex: (.+)\+.*
+  datetime_informat: "%Y-%m-%dT%H:%M:%S"
+
+custom_annotations:
+    - annotator: misc:constant
+      params:
+          out: text:misc.data_collected
+          chunk: text
+          value: "2022-03"
