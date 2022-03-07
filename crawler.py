@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """Crawler for SVT news."""
 
 import argparse
@@ -47,6 +49,8 @@ subparsers.required = True
 
 crawl_parser = subparsers.add_parser("crawl", description="Crawl svt.se and download news articles")
 crawl_parser.add_argument("-r", "--retry", action="store_true", help="try to crawl pages that have failed previously")
+crawl_parser.add_argument("-f", "--force", action="store_true", help="crawl all pages even if they have been crawled before")
+crawl_parser.add_argument("-d", "--debug", action="store_true", help="print some debug info while crawling")
 
 summary_parser = subparsers.add_parser("summary", description="Print summary of collected data")
 
@@ -107,8 +111,9 @@ class SvtParser():
 
     TOPICS.extend(["nyheter/lokalt/" + area for area in LOCAL])
 
-    def __init__(self):
+    def __init__(self, debug=False):
         self.get_crawled_data()
+        self.debug = debug
 
     def get_crawled_data(self):
         """Get list of crawled URLs from CRAWLED file."""
@@ -125,7 +130,7 @@ class SvtParser():
             with open(FAILED) as f:
                 self.failed_urls = json.load(f)
 
-    def crawl(self):
+    def crawl(self, force=False):
         """Get all article URLs from a certain topic from the SVT API."""
         self.query_params = {"q": "auto", "limit": self.LIMIT, "page": 1}
         for topic in self.TOPICS:
@@ -138,60 +143,82 @@ class SvtParser():
             firstpage = request.json()
             items = firstpage.get("auto", {}).get("pagination", {}).get("totalAvailableItems", 0)
             pages = int(math.ceil(int(items) / self.LIMIT))
-            print(f"\n{topic}: {items} items, {pages} pages")
-            self.get_urls(topic_name, topic_url, pages, firstpage, request)
+            print(f"\nCrawling {topic}: {items} items, {pages} pages")
+            self.get_urls(topic_name, topic_url, pages, firstpage, request, force)
 
-    def get_urls(self, topic_name, topic_url, pages, firstpage, request):
+    def get_urls(self, topic_name, topic_url, pages, firstpage, request, force=False):
         """Get article URLs from every page."""
-        prev_crawled = len(self.crawled_data)
+        prev_crawled = len(self.saved_urls)
+        done = False
         for i in range(1, pages + 1):
+            if done:
+                break
+
             self.query_params["page"] = i
             encoded_params = ",".join(f"{k}={v}" for k, v in self.query_params.items())
+            pagecontent = []
             try:
                 if i == 1:
                     pagecontent = firstpage.get("auto", {}).get("content", {})
                 else:
                     request = requests.get(topic_url, params=encoded_params)
                     pagecontent = request.json().get("auto", {}).get("content", {})
-                for c in pagecontent:
-                    short_url = c.get("url", "")
-                    if short_url:
-                        succeeded = self.get_article(short_url, topic_name)
-                        if succeeded:
-                           self.remove_from_failed(short_url)
-                        else:
-                           self.add_to_failed(short_url)
-                if request.url in self.failed_urls:
-                    self.remove_from_failed(request.url)
+                    if request.url in self.failed_urls:
+                        self.remove_from_failed(request.url)
             except Exception:
                 tb = traceback.format_exc().replace("\n", "\n  ")
-                print(f"  Error when parsing listing '{request.url}'\n  {tb}")
+                if self.debug:
+                    print(f"  Error when parsing listing '{request.url}'\n  {tb}")
                 self.add_to_failed(request.url)
 
-            write_json(self.failed_urls, FAILED)
-            if self.crawled_data > prev_crawled:
-                write_json(self.crawled_data, CRAWLED)
+            for c in pagecontent:
+                short_url = c.get("url", "")
+                if short_url.startswith("https://www.svt.se"):
+                    short_url = short_url[18:]
+                if short_url:
+                    # Stop crawling pages when reaching an article that has already been processed
+                    # (this should work because pages are sorted by publication date)
+                    if not force and short_url in self.saved_urls:
+                        if self.debug:
+                            print(f"  Article already saved, skipping remaining. Date: {c.get('published', None)}")
+                        done = True
+                        break
 
-    def get_article(self, short_url, topic_name):
+                    # Save article
+                    succeeded = self.get_article(short_url, topic_name, force)
+                    if succeeded:
+                        self.remove_from_failed(short_url)
+                    else:
+                        self.add_to_failed(short_url)
+
+            write_json(self.failed_urls, FAILED)
+            if len(self.saved_urls) > prev_crawled:
+                write_json(self.crawled_data, CRAWLED)
+                prev_crawled = len(self.saved_urls)
+
+    def get_article(self, short_url, topic_name, force=False):
         """Get the content from the article URL and save as json."""
         # Check if article has been downloaded already
         if short_url.startswith("https://www.svt.se"):
             short_url = short_url[18:]
-        if short_url in self.saved_urls:
+        if short_url in self.saved_urls and not force:
             return True
 
         article_url = self.ARTICLE_URL.format(short_url)
+        if self.debug:
+            print(f"  New article: {article_url}")
         try:
             article_json = requests.get(article_url).json().get("articles", {}).get("content", [])
 
             if len(article_json) == 0:
-                print(f"  No data found in article '{article_url}'")
+                if self.debug:
+                    print(f"  No data found in article '{article_url}'")
                 return False
 
             if len(article_json) > 1:
                 print(f"  Found article with multiple content entries: {short_url}")
 
-            article_id = article_json[0].get("id")
+            article_id = str(article_json[0].get("id"))
 
             year = 0
             if article_json[0].get("published"):
@@ -204,7 +231,7 @@ class SvtParser():
             if (year < 2004) or (year > this_year):
                 year = "nodate"
 
-            filepath = DATADIR / Path("svt-" + str(year)) / topic_name / Path(str(article_id) + ".json")
+            filepath = DATADIR / Path("svt-" + str(year)) / topic_name / Path(article_id + ".json")
             write_json(article_json, filepath)
 
             self.crawled_data[short_url] = [article_id, str(year), topic_name]
@@ -213,7 +240,8 @@ class SvtParser():
 
         except Exception:
             tb = traceback.format_exc().replace("\n", "\n  ")
-            print(f"  Error when parsing article '{article_url}'\n  {tb}")
+            if self.debug:
+                print(f"  Error when parsing article '{article_url}'\n  {tb}")
             return False
 
     def add_to_failed(self, url):
@@ -331,7 +359,8 @@ class SvtParser():
                     success.add(url)
                 except Exception:
                     tb = traceback.format_exc().replace("\n", "\n  ")
-                    print(f"  Error when parsing listing '{request.url}'\n  {tb}")
+                    if self.debug:
+                        print(f"  Error when parsing listing '{request.url}'\n  {tb}")
                     new_failed.add(url)
 
             # Process article
@@ -365,11 +394,10 @@ def process_articles(override_existing=False):
         write_data(contents, filepath)
 
     # Get previously processed data
+    processed_json = {}
     if PROCESSED_JSON.is_file():
         with open(PROCESSED_JSON) as f:
             processed_json = json.load(f)
-    else:
-        processed_json = {}
 
     # Loop through json files and convert them to XML
     for topicpath in sorted(DATADIR.rglob("svt-*/*")):
@@ -441,7 +469,7 @@ def process_article(article_json):
         year = int(article_json.get("published")[:4])
         if (year >= 2004) and (year <= this_year):
             article.set("date", article_json.get("published"))
-    else:
+    elif article_json.get("modified"):
         year = int(article_json.get("modified")[:4])
         if (year >= 2004) and (year <= this_year):
             article.set("date", article_json.get("modified"))
@@ -557,11 +585,13 @@ if __name__ == "__main__":
     if args.command == "crawl":
         if args.retry:
             print("\nTrying to crawl pages that failed last time ...\n")
-            SvtParser().retry_failed()
+            if args.force:
+                print("Argument '--force' is ignored when recrawling failed pages.\n")
+            SvtParser(debug=True).retry_failed()
         else:
             print("\nStarting to crawl svt.se ...\n")
             time.sleep(5)
-            SvtParser().crawl()
+            SvtParser(debug=args.debug).crawl(force=args.force)
 
     elif args.command == "summary":
         print("\nCalculating summary of collected articles ...\n")
@@ -569,7 +599,7 @@ if __name__ == "__main__":
 
     elif args.command == "xml":
         print("\nPreparing to convert articles to XML ...\n")
-        # process_articles(override_existing=args.override)
+        process_articles(override_existing=args.override)
 
     elif args.command == "build-index":
         print("\nBuilding an index of crawled files based on the downloaded JSON files ...\n")

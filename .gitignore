@@ -1,14 +1,17 @@
+# Python stuff
 *.pyc
 __pycache__
 venv
 
+# Data
 data
-data_old
 svt-*
 
+# Sparv-related stuff
 export
-sparv-workdir
 .snakemake
+preloader.out
+annotate.out
 nohup*
 
 .svn

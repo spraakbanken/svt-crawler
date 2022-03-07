@@ -8,7 +8,6 @@ classes:
     paragraph: p
 
 import:
-    source_dir: data/xml
     importer: xml_import:parse
     document_annotation: text
 
@@ -27,6 +26,7 @@ export:
         - korp:relations_sql
         - korp:timespan_sql
         - stats_export:sbx_freq_list
+        - xml_export:pretty
         - xml_export:scrambled
         - xml_export:combined_scrambled
         - xml_export:compressed_scrambled
@@ -45,6 +45,7 @@ install:
   - korp:install_relations
   - korp:install_timespan
   - xml_export:install_scrambled
+  - xml_export:install_original
   - stats_export:install_sbx_freq_list
   - sbx_metadata:install_json
   - sbx_metadata:install_metashare
@@ -66,4 +67,8 @@ custom_annotations:
       params:
           out: text:misc.data_collected
           chunk: text
-          value: "2022-03"
+          value: "2022-03-07"
+
+preload:
+    - saldo:annotate
+    - saldo:compound
