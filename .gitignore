@@ -10,8 +10,10 @@ svt-*
 # Sparv-related stuff
 export
 .snakemake
+annotate.sh
 preloader.out
 annotate.out
 nohup*
-
 .svn
+README-sparv.md
+config.yaml
