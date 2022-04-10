@@ -139,7 +139,7 @@ class SvtParser():
                 topic_name = topic.split("/")[-1]
             topic_url = self.API_URL + topic + "/"
             encoded_params = ",".join(f"{k}={v}" for k, v in self.query_params.items())
-            request = requests.get(topic_url, params=encoded_params)
+            request = requests.get(topic_url, params=encoded_params, timeout=30)
             firstpage = request.json()
             items = firstpage.get("auto", {}).get("pagination", {}).get("totalAvailableItems", 0)
             pages = int(math.ceil(int(items) / self.LIMIT))
@@ -161,7 +161,7 @@ class SvtParser():
                 if i == 1:
                     pagecontent = firstpage.get("auto", {}).get("content", {})
                 else:
-                    request = requests.get(topic_url, params=encoded_params)
+                    request = requests.get(topic_url, params=encoded_params, timeout=30)
                     pagecontent = request.json().get("auto", {}).get("content", {})
                     if request.url in self.failed_urls:
                         self.remove_from_failed(request.url)
@@ -208,7 +208,7 @@ class SvtParser():
         if self.debug:
             print(f"  New article: {article_url}")
         try:
-            article_json = requests.get(article_url).json().get("articles", {}).get("content", [])
+            article_json = requests.get(article_url, timeout=30).json().get("articles", {}).get("content", [])
 
             if len(article_json) == 0:
                 if self.debug:
@@ -347,7 +347,7 @@ class SvtParser():
             # Process article listing
             if url.startswith("https://api.svt.se/nss-api/page"):
                 try:
-                    request = requests.get(url)
+                    request = requests.get(url, timeout=30)
                     pagecontent = request.json().get("auto", {}).get("content", {})
                     for c in pagecontent:
                         short_url = c.get("url", "")
