@@ -569,8 +569,8 @@ def make_corpus_config(corpus_id, path):
         "metadata:\n"
         f"  id: {corpus_id}\n"
         "  name:\n"
-        f"    eng: SVT news {year if year != 'nodate' else 'okänt datum'}\n"
-        f"    swe: SVT nyheter {year if year != 'nodate' else 'unknown date'}\n"
+        f"    swe: SVT nyheter {year if year != 'nodate' else 'okänt datum'}\n"
+        f"    eng: SVT news {year if year != 'nodate' else 'unknown date'}\n"
     )
     with open(config_file, "w") as f:
         f.write(config_content)
