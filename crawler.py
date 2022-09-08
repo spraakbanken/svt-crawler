@@ -20,6 +20,7 @@ DATADIR = Path("data")
 CRAWLED = DATADIR / Path("crawled_pages.json")
 FAILED = DATADIR / Path("failed_urls.json")
 PROCESSED_JSON = DATADIR / Path("processed_json.json")
+MAX_SEEN_ARTICLES = 50  # stop crawling when encountering this many articles that have been downloaded already
 
 
 #-------------------------------------------------------------------------------
@@ -32,6 +33,16 @@ class CustomHelpFormatter(argparse.RawDescriptionHelpFormatter):
         if isinstance(action, argparse._SubParsersAction):
             return ""
         return result
+
+
+def valid_date(s):
+    """Make sure that s is a valid date in the correct format."""
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        msg = f"Not a valid date of format YY-MM-DD: {s}"
+        raise argparse.ArgumentTypeError(msg)
+
 
 parser = argparse.ArgumentParser(description=
                                 "Programme for crawling svt.se for news articles and converting the data to XML.",
@@ -51,6 +62,10 @@ crawl_parser = subparsers.add_parser("crawl", description="Crawl svt.se and down
 crawl_parser.add_argument("-r", "--retry", action="store_true", help="try to crawl pages that have failed previously")
 crawl_parser.add_argument("-f", "--force", action="store_true", help="crawl all pages even if they have been crawled before")
 crawl_parser.add_argument("-d", "--debug", action="store_true", help="print some debug info while crawling")
+crawl_parser.add_argument("-s", "--stop", type=valid_date, default=None,
+                          help="stop crawling when reaching articles published before this date (format 'YYYY-MM-DD'); "
+                               f"otherwise crawling will stop when reaching {MAX_SEEN_ARTICLES} consecutive articles "
+                               "that have already been downloaded")
 
 summary_parser = subparsers.add_parser("summary", description="Print summary of collected data")
 
@@ -130,11 +145,15 @@ class SvtParser():
             with open(FAILED) as f:
                 self.failed_urls = json.load(f)
 
-    def crawl(self, force=False):
+    def crawl(self, force=False, stopdate=None):
         """Get all article URLs from a certain topic from the SVT API."""
-        self.query_params = {"q": "auto", "limit": self.LIMIT, "page": 1}
+        self.stopdate = stopdate
+        self.query_params = {"q": "auto", "limit": self.LIMIT}
         for topic in self.TOPICS:
             topic_name = topic
+            self.query_params["page"] = 1
+            self.seen_articles_counter = 0
+            self.new_articles = 0
             if "/" in topic:
                 topic_name = topic.split("/")[-1]
             topic_url = self.API_URL + topic + "/"
@@ -144,24 +163,28 @@ class SvtParser():
             items = firstpage.get("auto", {}).get("pagination", {}).get("totalAvailableItems", 0)
             pages = int(math.ceil(int(items) / self.LIMIT))
             print(f"\nCrawling {topic}: {items} items, {pages} pages")
+            if self.debug:
+                print(f"  >> {request.url}")
             self.get_urls(topic_name, topic_url, pages, firstpage, request, force)
+            print(f"  New articles downloaded for '{topic_name}': {self.new_articles}")
+
+        print(f"\nDone Crawling! Failed to process {len(self.failed_urls)} URLs")
 
     def get_urls(self, topic_name, topic_url, pages, firstpage, request, force=False):
         """Get article URLs from every page."""
-        prev_crawled = len(self.saved_urls)
-        done = False
-        for i in range(1, pages + 1):
-            if done:
-                break
+        self.prev_crawled = len(self.saved_urls)
+        for i in range(self.query_params["page"], pages + 1):
 
-            self.query_params["page"] = i
-            encoded_params = ",".join(f"{k}={v}" for k, v in self.query_params.items())
             pagecontent = []
             try:
-                if i == 1:
+                if i == self.query_params["page"]:
                     pagecontent = firstpage.get("auto", {}).get("content", {})
                 else:
+                    self.query_params["page"] = i
+                    encoded_params = ",".join(f"{k}={v}" for k, v in self.query_params.items())
                     request = requests.get(topic_url, params=encoded_params)
+                    if self.debug:
+                        print(f"  >> {request.url}")
                     pagecontent = request.json().get("auto", {}).get("content", {})
                     if request.url in self.failed_urls:
                         self.remove_from_failed(request.url)
@@ -176,27 +199,38 @@ class SvtParser():
                 if short_url.startswith("https://www.svt.se"):
                     short_url = short_url[18:]
                 if short_url:
-                    # Stop crawling pages when reaching an article that has already been processed
-                    # (this should work because pages are sorted by publication date)
+                    article_date = c.get("published", None)
+                    if self.stopdate and article_date:
+                        parsed_article_date = datetime.strptime(article_date[:10], "%Y-%m-%d")
+                        if parsed_article_date < self.stopdate:
+                            print(f"  Encountered an article with publishing date {article_date[:10]}. Skipping remaining.")
+                            self.save_results()
+                            return
+
                     if not force and short_url in self.saved_urls:
+                        self.seen_articles_counter += 1
                         if self.debug:
-                            print(f"  Article already saved, skipping remaining. Date: {c.get('published', None)}")
-                        done = True
-                        break
+                            print(f"  Article already saved. article_date[:10] {short_url} Page: {request.url}")
+                        # Stop crawling pages when encountered MAX_SEEN_ARTICLES consecutive articles that have already
+                        # been processed (This should work because pages are sorted by publication date, but sometimes
+                        # SVT seems to reuse URLs, so that's why we check multiple articles in a row.)
+                        if not self.stopdate and self.seen_articles_counter >= MAX_SEEN_ARTICLES:
+                            print(f"  Encountered {MAX_SEEN_ARTICLES} seen articles. Skipping remaining.")
+                            self.save_results()
+                            return
+                    else:
+                        self.seen_articles_counter = 0
 
                     # Save article
-                    succeeded = self.get_article(short_url, topic_name, force)
+                    succeeded = self.get_article(short_url, topic_name, article_date[:10], force)
                     if succeeded:
                         self.remove_from_failed(short_url)
                     else:
                         self.add_to_failed(short_url)
 
-            write_json(self.failed_urls, FAILED)
-            if len(self.saved_urls) > prev_crawled:
-                write_json(self.crawled_data, CRAWLED)
-                prev_crawled = len(self.saved_urls)
+            self.save_results()
 
-    def get_article(self, short_url, topic_name, force=False):
+    def get_article(self, short_url, topic_name, article_date, force=False):
         """Get the content from the article URL and save as json."""
         # Check if article has been downloaded already
         if short_url.startswith("https://www.svt.se"):
@@ -206,7 +240,7 @@ class SvtParser():
 
         article_url = self.ARTICLE_URL.format(short_url)
         if self.debug:
-            print(f"  New article: {article_url}")
+            print(f"  New article: {article_date} {article_url}")
         try:
             article_json = requests.get(article_url).json().get("articles", {}).get("content", [])
 
@@ -236,6 +270,7 @@ class SvtParser():
 
             self.crawled_data[short_url] = [article_id, str(year), topic_name]
             self.saved_urls.add(short_url)
+            self.new_articles += 1
             return True
 
         except Exception:
@@ -253,6 +288,14 @@ class SvtParser():
         """Remove from failed URLs if present."""
         if url in self.failed_urls:
             self.failed_urls.remove(url)
+
+    def save_results(self):
+        """Save results of sucessfully and unsuccessfully crawled URLs."""
+        if self.failed_urls:
+            write_json(self.failed_urls, FAILED)
+        if len(self.saved_urls) > self.prev_crawled:
+            write_json(self.crawled_data, CRAWLED)
+            self.prev_crawled = len(self.saved_urls)
 
     def get_articles_summary(self):
         """Print number of articles per topic."""
@@ -589,9 +632,12 @@ if __name__ == "__main__":
                 print("Argument '--force' is ignored when recrawling failed pages.\n")
             SvtParser(debug=True).retry_failed()
         else:
-            print("\nStarting to crawl svt.se ...\n")
+            if args.stop:
+                print(f"\nStarting to crawl svt.se (until {args.stop.strftime('%Y-%m-%d')}) ...\n")
+            else:
+                print("\nStarting to crawl svt.se ...\n")
             time.sleep(5)
-            SvtParser(debug=args.debug).crawl(force=args.force)
+            SvtParser(debug=args.debug).crawl(force=args.force, stopdate=args.stop)
 
     elif args.command == "summary":
         print("\nCalculating summary of collected articles ...\n")

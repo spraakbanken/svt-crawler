@@ -3,6 +3,9 @@
 __pycache__
 venv
 
+# Editor stuff
+.vscode
+
 # Data
 data
 svt-*
@@ -13,6 +16,7 @@ export
 annotate.sh
 preloader.out
 annotate.out
+clean_exports.sh
 nohup*
 .svn
 README-sparv.md
