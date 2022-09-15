@@ -44,6 +44,14 @@ def valid_date(s):
         raise argparse.ArgumentTypeError(msg)
 
 
+def valid_year(s):
+    """Make sure that s is a valid year."""
+    try:
+        return datetime.strptime(s, "%Y")
+    except ValueError:
+        msg = f"Not a valid year: {s}"
+        raise argparse.ArgumentTypeError(msg)
+
 parser = argparse.ArgumentParser(description=
                                 "Programme for crawling svt.se for news articles and converting the data to XML.",
                                  formatter_class=CustomHelpFormatter)
@@ -70,7 +78,9 @@ crawl_parser.add_argument("-s", "--stop", type=valid_date, default=None,
 summary_parser = subparsers.add_parser("summary", description="Print summary of collected data")
 
 xml_parser = subparsers.add_parser("xml", description="Convert articles from JSON to XML")
+xml_parser.add_argument("-y", "--year", type=valid_year, default=None, help="preprocess only articles published in a certain year")
 xml_parser.add_argument("-o", "--override", action="store_true", help="override existing xml files")
+xml_parser.add_argument("-d", "--debug", action="store_true", help="print some debug info while converting")
 
 index_parser = subparsers.add_parser("build-index",
                                      description="Compile an index of the crawled data based on the downloaded files")
@@ -168,7 +178,7 @@ class SvtParser():
             self.get_urls(topic_name, topic_url, pages, firstpage, request, force)
             print(f"  New articles downloaded for '{topic_name}': {self.new_articles}")
 
-        print(f"\nDone Crawling! Failed to process {len(self.failed_urls)} URLs")
+        print(f"\nDone crawling! Failed to process {len(self.failed_urls)} URLs")
 
     def get_urls(self, topic_name, topic_url, pages, firstpage, request, force=False):
         """Get article URLs from every page."""
@@ -428,12 +438,12 @@ class SvtParser():
 # Process JSON data
 #-------------------------------------------------------------------------------
 
-def process_articles(override_existing=False):
+def process_articles(year=None, override_existing=False, debug=False):
     """Convert json data to Sparv-friendly XML."""
     def write_contents(contents, contents_dir, filecounter):
         contents += "</articles>"
         filepath = contents_dir / (str(filecounter) + ".xml")
-        print(f"writing file {filepath}")
+        print(f"  Writing file {filepath}")
         write_data(contents, filepath)
 
     # Get previously processed data
@@ -442,8 +452,14 @@ def process_articles(override_existing=False):
         with open(PROCESSED_JSON) as f:
             processed_json = json.load(f)
 
+    if year:
+        year = year.strftime("%Y")
+    processed_now = 0
+
     # Loop through json files and convert them to XML
-    for topicpath in sorted(DATADIR.rglob("svt-*/*")):
+    for topicpath in sorted(DATADIR.glob(f"svt-{year or '*'}/*")):
+        processed = 0
+        print(f"Processing '{topicpath}'")
         yeardir = topicpath.parts[1]
         make_corpus_config(yeardir, Path(yeardir))
         contents = "<articles>\n"
@@ -456,10 +472,12 @@ def process_articles(override_existing=False):
             if p.is_file() and p.suffix == ".json":
 
                 if not override_existing and str(p) in processed_json:
-                    print(f"Skipping {p}, already processed in {processed_json[str(p)]}")
+                    if debug:
+                        print(f"  Skipping {p}, already processed in {processed_json[str(p)]}")
                     continue
 
-                print(f"processing {p}")
+                if debug:
+                    print(f"  Processing {p}")
                 with open(p) as f:
                     article_json = json.load(f)
                     xml = process_article(article_json[0])
@@ -470,11 +488,19 @@ def process_articles(override_existing=False):
                         write_contents(contents, contents_dir, filecounter)
                         contents = "<articles>\n"
                         filecounter += 1
+                processed += 1
+                processed_now += 1
         # Write remaining contents
         if len(contents) > 11:
             write_contents(contents, contents_dir, filecounter)
+        print(f"Processed {processed} new article files in '{topicpath}'\n")
 
         write_json(processed_json, PROCESSED_JSON)
+
+    if not processed_now:
+        print(f"No new articles found")
+    else:
+        print(f"Done converting {processed_now} articles to XML!")
 
 
 def process_article(article_json):
@@ -491,7 +517,6 @@ def process_article(article_json):
                 parent.text = elem.get("content", "")
         if "children" in elem:
             # Keep only p and h* tags (but convert h* to p), avoid nested p tags
-            # if re.match(r"p|h\d", json_tag):
             if re.match(r"p|h\d", json_tag) and parent.tag != "p":
                 xml_elem = etree.SubElement(parent, "p")
             # xml_elem = etree.SubElement(parent, elem.get("type"))
@@ -601,9 +626,11 @@ def write_data(data, filepath):
         f.write(data)
 
 
-def make_corpus_config(corpus_id, path):
+def make_corpus_config(corpus_id, path, override=False):
     """Write Sparv corpus config file for sub corpus."""
     config_file = path / "config.yaml"
+    if config_file.is_file() and not override:
+        return
     path.mkdir(parents=True, exist_ok=True)
     year = corpus_id.split("-")[-1]
     config_content = (
@@ -644,8 +671,11 @@ if __name__ == "__main__":
         SvtParser().get_articles_summary()
 
     elif args.command == "xml":
-        print("\nPreparing to convert articles to XML ...\n")
-        process_articles(override_existing=args.override)
+        if args.year:
+            print(f"\nPreparing to convert articles from {args.year.strftime('%Y')} to XML ...\n")
+        else:
+            print("\nPreparing to convert articles to XML ...\n")
+        process_articles(year=args.year, override_existing=args.override, debug=args.debug)
 
     elif args.command == "build-index":
         print("\nBuilding an index of crawled files based on the downloaded JSON files ...\n")
