@@ -46,8 +46,11 @@ def valid_date(s):
 
 def valid_year(s):
     """Make sure that s is a valid year."""
+    if s == "nodate":
+        return s
     try:
-        return datetime.strptime(s, "%Y")
+        datetime.strptime(s, "%Y")
+        return s
     except ValueError:
         msg = f"Not a valid year: {s}"
         raise argparse.ArgumentTypeError(msg)
@@ -220,7 +223,7 @@ class SvtParser():
                     if not force and short_url in self.saved_urls:
                         self.seen_articles_counter += 1
                         if self.debug:
-                            print(f"  Article already saved. article_date[:10] {short_url} Page: {request.url}")
+                            print(f"  Article already saved. {article_date[:10]} {short_url} Page: {request.url}")
                         # Stop crawling pages when encountered MAX_SEEN_ARTICLES consecutive articles that have already
                         # been processed (This should work because pages are sorted by publication date, but sometimes
                         # SVT seems to reuse URLs, so that's why we check multiple articles in a row.)
@@ -452,8 +455,6 @@ def process_articles(year=None, override_existing=False, debug=False):
         with open(PROCESSED_JSON) as f:
             processed_json = json.load(f)
 
-    if year:
-        year = year.strftime("%Y")
     processed_now = 0
 
     # Loop through json files and convert them to XML
@@ -478,9 +479,11 @@ def process_articles(year=None, override_existing=False, debug=False):
 
                 if debug:
                     print(f"  Processing {p}")
+
+                download_date = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")
                 with open(p) as f:
                     article_json = json.load(f)
-                    xml = process_article(article_json[0])
+                    xml = process_article(article_json[0], download_date)
                     contents += xml + "\n"
                     processed_json[str(p)] = str(contents_dir / str(filecounter)) + ".xml"
                     # Write files that are around 5 MB in size
@@ -503,7 +506,7 @@ def process_articles(year=None, override_existing=False, debug=False):
         print(f"Done converting {processed_now} articles to XML!")
 
 
-def process_article(article_json):
+def process_article(article_json, download_date):
     """Parse JSON for one article and transform to XML"""
     def parse_element(elem, parent):
         xml_elem = parent
@@ -530,6 +533,7 @@ def process_article(article_json):
             xml_elem.set(xml_name, attr)
 
     article = etree.Element("text")
+    article.set("data_collected", download_date)
 
     # Set article date or omit if year is out of range
     this_year = int(datetime.today().strftime("%Y"))
@@ -672,7 +676,7 @@ if __name__ == "__main__":
 
     elif args.command == "xml":
         if args.year:
-            print(f"\nPreparing to convert articles from {args.year.strftime('%Y')} to XML ...\n")
+            print(f"\nPreparing to convert articles from {args.year} to XML ...\n")
         else:
             print("\nPreparing to convert articles to XML ...\n")
         process_articles(year=args.year, override_existing=args.override, debug=args.debug)
@@ -686,7 +690,9 @@ if __name__ == "__main__":
 
     # SvtParser().get_article("/nyheter/inrikes/toppmote-om-arktis-i-kiruna", "inrikes")
 
-    # with open("data/svt-2020/konsument/28334881.json") as f:
+    # testfile = "data/svt-2023/konsument/38240503.json"
+    # download_date = datetime.fromtimestamp(Path(testfile).stat().st_mtime).strftime("%Y-%m-%d")
+    # with open(testfile) as f:
     #     article_json = json.load(f)
-    #     xml = process_article(article_json[0])
+    #     xml = process_article(article_json[0], download_date)
     #     print(xml)

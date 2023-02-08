@@ -15,10 +15,9 @@ python crawler.py
 
 Follow the instructions given by the command line interface.
 
-**Note:** Due to caching issues in the SVT API it may happen that not all articles
-are downloaded on the first attempt.
+The crawling process will stop automatically when encountering too many articles that have been downloaded already.
 
+**Note:** Due to caching issues in the SVT API it may happen that not all articles are downloaded on the first attempt.
 
-## Todo
-
-- [ ] Add "date collected" attribute to json when downloading an article.
+The XML conversion step will not override any files created previously unless this is specified with the `--override`
+option.
